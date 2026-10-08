@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Order Queue</title>
+</head>
+
+<body>
+
+    <h1>🎟️ Canteen Order Queue</h1>
+
+    <% if (orders.length === 0) { %>
+
+        <p>📭 No orders in the queue.</p>
+
+    <% } else { %>
+
+        <% orders.forEach(order => { %>
+
+            <div>
+
+                <h2>
+                    🎟️ Token: <%= order.token_number %>
+                </h2>
+
+                <p>
+                    🍔 Item: <%= order.item_name %>
+                </p>
+
+                <p>
+                    💰 Total: ₹<%= order.total_amount %>
+                </p>
+
+                <p>
+                    📋 Status: <strong><%= order.status %></strong>
+                </p>
+
+
+                <% if (order.status === "Pending") { %>
+
+                    <form action="/update-status" method="POST">
+
+                        <input
+                            type="hidden"
+                            name="order_id"
+                            value="<%= order.id %>"
+                        >
+
+                        <input
+                            type="hidden"
+                            name="status"
+                            value="Preparing"
+                        >
+
+                        <button type="submit">
+                            👨‍🍳 Start Preparing
+                        </button>
+
+                    </form>
+
+                <% } else if (order.status === "Preparing") { %>
+
+                    <form action="/update-status" method="POST">
+
+                        <input
+                            type="hidden"
+                            name="order_id"
+                            value="<%= order.id %>"
+                        >
+
+                        <input
+                            type="hidden"
+                            name="status"
+                            value="Ready"
+                        >
+
+                        <button type="submit">
+                            🔔 Mark Ready
+                        </button>
+
+                    </form>
+
+                <% } else if (order.status === "Ready") { %>
+
+                    <form action="/update-status" method="POST">
+
+                        <input
+                            type="hidden"
+                            name="order_id"
+                            value="<%= order.id %>"
+                        >
+
+                        <input
+                            type="hidden"
+                            name="status"
+                            value="Collected"
+                        >
+
+                        <button type="submit">
+                            ✅ Mark Collected
+                        </button>
+
+                    </form>
+
+                <% } else { %>
+
+                    <p>✅ Order Collected</p>
+
+                <% } %>
+
+            </div>
+
+            <hr>
+
+        <% }); %>
+
+    <% } %>
+
+
+    <br>
+
+    <a href="/">
+        ⬅ Back to Menu
+    </a>
+
+</body>
+
+</html>

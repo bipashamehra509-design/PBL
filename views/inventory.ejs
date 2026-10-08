@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inventory Management</title>
+</head>
+
+<body>
+
+    <h1>📦 Smart Canteen Inventory</h1>
+
+    <% if (inventory.length === 0) { %>
+
+        <p>📭 No inventory items found.</p>
+
+    <% } else { %>
+
+        <% inventory.forEach(item => { %>
+
+            <div>
+                <h2>📦 <%= item.item_name %></h2>
+
+                <p>
+                    Quantity:
+                    <strong><%= item.quantity %> <%= item.unit %></strong>
+                </p>
+
+                <p>
+                    Low Stock Limit:
+                    <%= item.low_stock_limit %>
+                </p>
+
+                <% if (item.quantity <= item.low_stock_limit) { %>
+                    <p>⚠️ <strong>LOW STOCK!</strong></p>
+                <% } else { %>
+                    <p>✅ Stock Available</p>
+                <% } %>
+            </div>
+
+            <hr>
+
+        <% }); %>
+
+    <% } %>
+
+    <br>
+
+    <a href="/">⬅ Back to Menu</a>
+
+</body>
+
+</html>

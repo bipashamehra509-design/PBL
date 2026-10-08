@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Smart Canteen</title>
+</head>
+
+<body>
+
+    <h1>🍔 Smart Canteen</h1>
+    <h2>Today's Menu</h2>
+
+    <% menu.forEach(item => { %>
+
+        <div>
+            <h3><%= item.name %></h3>
+
+            <p><%= item.description %></p>
+
+            <p>💰 ₹<%= item.price %></p>
+
+            <p>Available: <%= item.quantity %></p>
+
+            <form action="/order" method="POST">
+    <input type="hidden" name="menu_id" value="<%= item.id %>">
+    <button type="submit">Order Now</button>
+</form>
+        </div>
+
+        <hr>
+
+    <% }); %>
+
+</body>
+</html>
