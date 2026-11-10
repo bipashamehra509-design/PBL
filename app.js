@@ -1,411 +1,188 @@
+require("dotenv").config();
 const express = require("express");
+const path = require("path");
 const db = require("./db");
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+const allowedStatuses = ["Pending", "Preparing", "Ready", "Completed", "Cancelled"];
+const allowedPriorities = ["Normal", "High", "Urgent"];
 
-// EJS setup
 app.set("view engine", "ejs");
-
-// Parse form data
+app.set("views", path.join(__dirname, "views"));
 app.use(express.urlencoded({ extended: true }));
-
-// Parse JSON
-app.use(express.json());
-
-
-// ===============================
-// HOME PAGE
-// ===============================
+app.use(express.static(path.join(__dirname, "public")));
 
 app.get("/", (req, res) => {
-
-    db.query(
-        "SELECT * FROM menu WHERE available = TRUE",
-        (err, results) => {
-
-            if (err) {
-                return res.status(500).send(
-                    "Database Error: " + err.message
-                );
-            }
-
-            res.render("home", { menu: results });
-        }
-    );
-
+  try {
+    const items = db.all("SELECT * FROM inventory ORDER BY name");
+    res.render("home", { items, error: req.query.error || "" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not load menu.");
+  }
 });
-
-
-// ===============================
-// PLACE ORDER
-// ===============================
 
 app.post("/order", (req, res) => {
+  const customer = (req.body.customer_name || "").trim();
+  const itemId = Number(req.body.item_id);
+  const quantity = Number(req.body.quantity);
+  const priority = allowedPriorities.includes(req.body.priority) ? req.body.priority : "Normal";
 
-    const menuId = req.body.menu_id;
-    const userId = 1;
+  if (!customer || customer.length > 120 || !Number.isInteger(itemId) ||
+      !Number.isInteger(quantity) || quantity < 1 || quantity > 50) {
+    return res.redirect("/?error=" + encodeURIComponent("Please enter valid order details."));
+  }
 
-    const tokenQuery = `
-        SELECT COALESCE(MAX(token_number), 0) + 1 AS next_token
-        FROM orders
-    `;
-
-    db.query(tokenQuery, (err, tokenResult) => {
-
-        if (err) {
-            return res.status(500).send(
-                "Token Error: " + err.message
-            );
-        }
-
-        const tokenNumber = tokenResult[0].next_token;
-
-        db.query(
-            "SELECT * FROM menu WHERE id = ? AND available = TRUE AND quantity > 0",
-            [menuId],
-            (err, menuResult) => {
-
-                if (err) {
-                    return res.status(500).send(
-                        "Menu Error: " + err.message
-                    );
-                }
-
-                if (menuResult.length === 0) {
-                    return res.status(404).send(
-                        "Food item is out of stock!"
-                    );
-                }
-
-                const item = menuResult[0];
-                const totalAmount = item.price;
-
-                const orderQuery = `
-                    INSERT INTO orders
-                    (user_id, token_number, total_amount, status)
-                    VALUES (?, ?, ?, 'Pending')
-                `;
-
-                db.query(
-                    orderQuery,
-                    [userId, tokenNumber, totalAmount],
-                    (err, orderResult) => {
-
-                        if (err) {
-                            return res.status(500).send(
-                                "Order Error: " + err.message
-                            );
-                        }
-
-                        const itemQuery = `
-                            INSERT INTO order_items
-                            (order_id, menu_id, quantity, price)
-                            VALUES (?, ?, 1, ?)
-                        `;
-
-                        db.query(
-                            itemQuery,
-                            [
-                                orderResult.insertId,
-                                menuId,
-                                item.price
-                            ],
-                            (err) => {
-
-                                if (err) {
-                                    return res.status(500).send(
-                                        "Order Item Error: " +
-                                        err.message
-                                    );
-                                }
-
-                                // Decrease menu stock by 1
-                                const stockQuery = `
-                                    UPDATE menu
-                                    SET quantity = quantity - 1
-                                    WHERE id = ? AND quantity > 0
-                                `;
-
-                                db.query(
-                                    stockQuery,
-                                    [menuId],
-                                    (err) => {
-
-                                        if (err) {
-                                            return res.status(500).send(
-                                                "Stock Update Error: " +
-                                                err.message
-                                            );
-                                        }
-
-                                        res.send(`
-                                            <!DOCTYPE html>
-                                            <html>
-
-                                            <head>
-                                                <title>Order Successful</title>
-                                            </head>
-
-                                            <body>
-
-                                                <h1>
-                                                    🎉 Order Placed Successfully!
-                                                </h1>
-
-                                                <h2>
-                                                    🎟️ Your Token Number:
-                                                    ${tokenNumber}
-                                                </h2>
-
-                                                <p>
-                                                    🍔 Item:
-                                                    ${item.name}
-                                                </p>
-
-                                                <p>
-                                                    💰 Total:
-                                                    ₹${totalAmount}
-                                                </p>
-
-                                                <p>
-                                                    📦 Remaining Stock:
-                                                    ${item.quantity - 1}
-                                                </p>
-
-                                                <p>
-                                                    📋 Status:
-                                                    Pending
-                                                </p>
-
-                                                <br>
-
-                                                <a href="/">
-                                                    ⬅ Back to Menu
-                                                </a>
-
-                                            </body>
-
-                                            </html>
-                                        `);
-
-                                    }
-                                );
-
-                            }
-                        );
-
-                    }
-                );
-
-            }
-        );
-
+  try {
+    db.transaction(tx => {
+      const item = tx.get("SELECT id, price, stock FROM inventory WHERE id=?", [itemId]);
+      if (!item || item.stock < quantity) throw new Error("NOT_ENOUGH_STOCK");
+      tx.run("INSERT INTO orders (customer_name,item_id,quantity,total,priority) VALUES (?,?,?,?,?)",
+        [customer, itemId, quantity, item.price * quantity, priority]);
+      tx.run("UPDATE inventory SET stock=stock-? WHERE id=?", [quantity, itemId]);
     });
-
+    res.redirect("/orders?success=1");
+  } catch (err) {
+    if (err.message === "NOT_ENOUGH_STOCK") {
+      return res.redirect("/?error=" + encodeURIComponent("Not enough stock available."));
+    }
+    console.error(err);
+    res.status(500).send("Could not place order.");
+  }
 });
-
-
-// ===============================
-// ORDER QUEUE
-// ===============================
 
 app.get("/orders", (req, res) => {
-
-    const query = `
-        SELECT
-            orders.id,
-            orders.token_number,
-            orders.total_amount,
-            orders.status,
-            menu.name AS item_name
-        FROM orders
-        JOIN order_items
-            ON orders.id = order_items.order_id
-        JOIN menu
-            ON order_items.menu_id = menu.id
-        ORDER BY
-            CASE
-                WHEN orders.status = 'Pending' THEN 1
-                WHEN orders.status = 'Preparing' THEN 2
-                WHEN orders.status = 'Ready' THEN 3
-                WHEN orders.status = 'Collected' THEN 4
-            END,
-            orders.token_number ASC
-    `;
-
-    db.query(query, (err, results) => {
-
-        if (err) {
-            return res.status(500).send(
-                "Queue Error: " + err.message
-            );
-        }
-
-        res.render("orders", { orders: results });
-
-    });
-
-});
-
-
-// ===============================
-// UPDATE ORDER STATUS
-// ===============================
-
-app.post("/update-status", (req, res) => {
-
-    const orderId = req.body.order_id;
-    const newStatus = req.body.status;
-
-    const allowedStatuses = [
-        "Pending",
-        "Preparing",
-        "Ready",
-        "Collected"
-    ];
-
-    if (!allowedStatuses.includes(newStatus)) {
-        return res.status(400).send(
-            "Invalid order status!"
-        );
+  try {
+    const search = (req.query.search || "").trim();
+    const status = req.query.status || "";
+    const priority = req.query.priority || "";
+    const conditions = [];
+    const params = [];
+    if (search) {
+      conditions.push("(o.customer_name LIKE ? OR i.name LIKE ? OR CAST(o.id AS TEXT) LIKE ?)");
+      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
-
-    const query = `
-        UPDATE orders
-        SET status = ?
-        WHERE id = ?
-    `;
-
-    db.query(
-        query,
-        [newStatus, orderId],
-        (err) => {
-
-            if (err) {
-                return res.status(500).send(
-                    "Status Update Error: " +
-                    err.message
-                );
-            }
-
-            res.redirect("/orders");
-
-        }
+    if (allowedStatuses.includes(status)) {
+      conditions.push("o.status=?");
+      params.push(status);
+    }
+    if (allowedPriorities.includes(priority)) {
+      conditions.push("o.priority=?");
+      params.push(priority);
+    }
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    const orders = db.all(
+      `SELECT o.*, i.name AS item_name FROM orders o
+       JOIN inventory i ON i.id=o.item_id ${where}
+       ORDER BY CASE o.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 ELSE 2 END,
+       o.created_at ASC, o.id ASC`,
+      params
     );
-
+    res.render("orders", { orders, search, status, priority, statuses: allowedStatuses,
+      priorities: allowedPriorities, success: req.query.success === "1" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not load orders.");
+  }
 });
 
-// ===============================
-// ADMIN DASHBOARD
-// ===============================
+app.post("/update-status/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const status = req.body.status;
+  if (!Number.isInteger(id) || !allowedStatuses.includes(status)) return res.status(400).send("Invalid update.");
+  try {
+    db.run("UPDATE orders SET status=? WHERE id=?", [status, id]);
+    res.redirect("/orders");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not update status.");
+  }
+});
 
 app.get("/admin", (req, res) => {
-
-    const query = `
-        SELECT
-            COUNT(*) AS totalOrders,
-            COALESCE(SUM(total_amount), 0) AS totalSales,
-
-            SUM(CASE
-                WHEN status = 'Pending' THEN 1
-                ELSE 0
-            END) AS pendingOrders,
-
-            SUM(CASE
-                WHEN status = 'Preparing' THEN 1
-                ELSE 0
-            END) AS preparingOrders,
-
-            SUM(CASE
-                WHEN status = 'Ready' THEN 1
-                ELSE 0
-            END) AS readyOrders,
-
-            SUM(CASE
-                WHEN status = 'Collected' THEN 1
-                ELSE 0
-            END) AS collectedOrders
-
-        FROM orders
-    `;
-
-    db.query(query, (err, results) => {
-
-        if (err) {
-            return res.status(500).send(
-                "Admin Dashboard Error: " + err.message
-            );
-        }
-
-        const stats = results[0];
-
-        res.render("admin", { stats: stats });
-
-    });
-
+  try {
+    const summary = db.get(`
+      SELECT COUNT(*) AS total_orders,
+      COALESCE(SUM(CASE WHEN status NOT IN ('Completed','Cancelled') THEN 1 ELSE 0 END),0) AS active_orders,
+      COALESCE(SUM(CASE WHEN status='Completed' THEN total ELSE 0 END),0) AS revenue
+      FROM orders`);
+    const stockSummary = db.get(
+      "SELECT COUNT(*) AS products, COALESCE(SUM(stock),0) AS units, COALESCE(SUM(CASE WHEN stock <= low_stock_limit THEN 1 ELSE 0 END),0) AS low_stock FROM inventory"
+    );
+    const recent = db.all(
+      `SELECT o.*, i.name AS item_name FROM orders o JOIN inventory i ON i.id=o.item_id
+       ORDER BY CASE WHEN o.status IN ('Completed','Cancelled') THEN 1 ELSE 0 END,
+       CASE o.priority WHEN 'Urgent' THEN 0 WHEN 'High' THEN 1 ELSE 2 END,
+       o.created_at ASC, o.id ASC LIMIT 6`
+    );
+    res.render("admin", { summary, stockSummary, recent });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not load dashboard.");
+  }
 });
-// ===============================
-// INVENTORY PAGE
-// ===============================
 
 app.get("/inventory", (req, res) => {
-
-    const query = `
-        SELECT *
-        FROM inventory
-        ORDER BY item_name ASC
-    `;
-
-    db.query(query, (err, results) => {
-
-        if (err) {
-            return res.status(500).send(
-                "Inventory Error: " + err.message
-            );
-        }
-
-        res.render("inventory", { inventory: results });
-
-    });
-
+  try {
+    const items = db.all("SELECT * FROM inventory ORDER BY CASE WHEN stock <= low_stock_limit THEN 0 ELSE 1 END, name");
+    res.render("inventory", { items, error: req.query.error || "", success: req.query.success === "1" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not load inventory.");
+  }
 });
 
+app.post("/inventory/add", (req, res) => {
+  const name = (req.body.name || "").trim();
+  const price = Number(req.body.price);
+  const stock = Number(req.body.stock);
+  const limit = Number(req.body.low_stock_limit);
+  if (!name || name.length > 120 || !Number.isFinite(price) || price < 0 ||
+      !Number.isInteger(stock) || stock < 0 || !Number.isInteger(limit) || limit < 0) {
+    return res.redirect("/inventory?error=" + encodeURIComponent("Please enter valid item details."));
+  }
+  try {
+    db.run("INSERT INTO inventory (name,price,stock,low_stock_limit) VALUES (?,?,?,?)",
+      [name, price, stock, limit]);
+    res.redirect("/inventory?success=1");
+  } catch (err) {
+    console.error(err);
+    res.redirect("/inventory?error=" + encodeURIComponent("Item could not be added. Name may already exist."));
+  }
+});
 
-// ===============================
-// TEST DATABASE CONNECTION
-// ===============================
+app.post("/inventory/update/:id", (req, res) => {
+  const id = Number(req.params.id);
+  const stock = Number(req.body.stock);
+  const price = Number(req.body.price);
+  const limit = Number(req.body.low_stock_limit);
+  if (!Number.isInteger(id) || !Number.isInteger(stock) || stock < 0 ||
+      !Number.isFinite(price) || price < 0 || !Number.isInteger(limit) || limit < 0) {
+    return res.redirect("/inventory?error=" + encodeURIComponent("Invalid stock or price."));
+  }
+  try {
+    db.run("UPDATE inventory SET stock=?, price=?, low_stock_limit=? WHERE id=?",
+      [stock, price, limit, id]);
+    res.redirect("/inventory?success=1");
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Could not update item.");
+  }
+});
 
 app.get("/test-db", (req, res) => {
-
-    db.query(
-        "SELECT 1 AS result",
-        (err, results) => {
-
-            if (err) {
-                return res.status(500).send(
-                    "Database Error: " + err.message
-                );
-            }
-
-            res.send(
-                "✅ Database Connected Successfully!"
-            );
-
-        }
-    );
-
+  try {
+    db.get("SELECT 1 AS ok");
+    res.send("Local SQLite database connected successfully!");
+  } catch (err) {
+    res.status(500).send("Database error: " + err.message);
+  }
 });
 
-
-// ===============================
-// START SERVER
-// ===============================
-
-app.listen(PORT, () => {
-
-    console.log(
-        `🚀 Server running at http://localhost:${PORT}`
-    );
-
+db.initialize().then(() => {
+  app.listen(PORT, () => console.log(`Smart Canteen running at http://localhost:${PORT}`));
+}).catch(err => {
+  console.error("Could not initialize local database:", err);
+  process.exit(1);
 });
